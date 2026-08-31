@@ -1,0 +1,36 @@
+"""
+Pharell AI - Générateur d'applications
+Génère une mini-application web complète (HTML/CSS/JS en un seul fichier ou multi-fichiers)
+à partir d'une description, prête à être déployée avec le module deploy_vercel.
+"""
+from modules.llm import chat
+
+APP_SYSTEM_PROMPT = """Tu es Pharell AI, expert en développement web front-end.
+Génère une application web COMPLÈTE et fonctionnelle en un seul fichier HTML
+(CSS et JS inclus dans le même fichier, pas de dépendances externes sauf CDN si nécessaire).
+Réponds UNIQUEMENT avec le code HTML complet, sans explication ni texte autour, sans balises markdown."""
+
+
+def generate_webapp(description):
+    """Retourne le code HTML complet d'une mini-application prête à déployer."""
+    html_code = chat(
+        messages=[{"role": "user", "content": f"Crée cette application : {description}"}],
+        system_prompt=APP_SYSTEM_PROMPT,
+        temperature=0.3,
+        max_tokens=4000,
+    )
+    # Nettoyage au cas où le modèle ajoute des balises markdown malgré la consigne
+    html_code = html_code.strip()
+    if html_code.startswith("```"):
+        html_code = html_code.split("```")[1]
+        if html_code.startswith("html"):
+            html_code = html_code[4:]
+    return html_code.strip()
+
+
+def generate_and_deploy_webapp(description, project_name="pharell-app"):
+    """Génère l'app puis la déploie directement sur Vercel. Retourne l'URL publique."""
+    from modules.deploy_vercel import deploy_static_site
+    html_code = generate_webapp(description)
+    url = deploy_static_site(project_name, {"index.html": html_code})
+    return url, html_code
