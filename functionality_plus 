@@ -1,0 +1,73 @@
+"""
+Pharell AI - Module YouTube
+Upload de vidéos via l'API officielle YouTube Data API v3 + OAuth2.
+Nécessite un fichier client_secrets.json (créé depuis Google Cloud Console,
+type "Desktop app", avec la YouTube Data API v3 activée).
+Au premier lancement, une fenêtre de navigateur s'ouvre pour l'autorisation.
+"""
+import os
+import pickle
+from config import YOUTUBE_CLIENT_SECRETS_FILE, YOUTUBE_TOKEN_FILE, YOUTUBE_SCOPES
+
+
+class YouTubeError(Exception):
+    pass
+
+
+def _get_authenticated_service():
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from google.auth.transport.requests import Request
+    from googleapiclient.discovery import build
+
+    creds = None
+    if os.path.exists(YOUTUBE_TOKEN_FILE):
+        with open(YOUTUBE_TOKEN_FILE, "rb") as f:
+            creds = pickle.load(f)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            if not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE):
+                raise YouTubeError(
+                    f"Fichier {YOUTUBE_CLIENT_SECRETS_FILE} introuvable. "
+                    "Télécharge-le depuis Google Cloud Console (OAuth Desktop App)."
+                )
+            flow = InstalledAppFlow.from_client_secrets_file(YOUTUBE_CLIENT_SECRETS_FILE, YOUTUBE_SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open(YOUTUBE_TOKEN_FILE, "wb") as f:
+            pickle.dump(creds, f)
+
+    return build("youtube", "v3", credentials=creds)
+
+
+def upload_video(video_path, title, description="", tags=None, category_id="22", privacy_status="private"):
+    """
+    privacy_status: 'private', 'unlisted' ou 'public'.
+    Par défaut 'private' par sécurité — passe explicitement 'public' pour publier réellement.
+    """
+    from googleapiclient.http import MediaFileUpload
+
+    youtube = _get_authenticated_service()
+
+    body = {
+        "snippet": {
+            "title": title,
+            "description": description,
+            "tags": tags or [],
+            "categoryId": category_id,
+        },
+        "status": {"privacyStatus": privacy_status},
+    }
+
+    media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
+    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+
+    response = None
+    while response is None:
+        status, response = request.next_chunk()
+        if status:
+            print(f"Upload en cours : {int(status.progress() * 100)}%")
+
+    video_id = response["id"]
+    return f"https://youtu.be/{video_id}"
