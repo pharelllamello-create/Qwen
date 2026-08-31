@@ -1,0 +1,81 @@
+"""
+Pharell AI - Module de génération d'images
+Compatible avec l'API Images d'OpenAI (DALL-E) ou toute API compatible.
+Pour Stability AI / Stable Diffusion, adapte le payload dans generate_image_stability().
+"""
+import base64
+import os
+import requests
+from config import IMAGE_API_BASE, IMAGE_API_KEY, IMAGE_MODEL
+
+
+class ImageGenError(Exception):
+    pass
+
+
+def generate_image(prompt, size="1024x1024", n=1, save_dir="generated_images"):
+    """
+    Génère une ou plusieurs images à partir d'un prompt texte.
+    Retourne la liste des chemins de fichiers sauvegardés.
+    """
+    if not IMAGE_API_KEY:
+        raise ImageGenError("Clé API image manquante. Définis PHARELL_IMAGE_API_KEY.")
+
+    resp = requests.post(
+        f"{IMAGE_API_BASE}/images/generations",
+        headers={
+            "Authorization": f"Bearer {IMAGE_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": IMAGE_MODEL,
+            "prompt": prompt,
+            "size": size,
+            "n": n,
+            "response_format": "b64_json",
+        },
+        timeout=120,
+    )
+    if resp.status_code != 200:
+        raise ImageGenError(f"Erreur API image ({resp.status_code}): {resp.text}")
+
+    data = resp.json()
+    os.makedirs(save_dir, exist_ok=True)
+    paths = []
+    for i, item in enumerate(data["data"]):
+        img_bytes = base64.b64decode(item["b64_json"])
+        path = os.path.join(save_dir, f"image_{abs(hash(prompt)) % 100000}_{i}.png")
+        with open(path, "wb") as f:
+            f.write(img_bytes)
+        paths.append(path)
+    return paths
+
+
+def edit_image(image_path, prompt, mask_path=None, size="1024x1024", save_dir="generated_images"):
+    """
+    Édite une image existante à partir d'un prompt (inpainting si un mask est fourni).
+    """
+    if not IMAGE_API_KEY:
+        raise ImageGenError("Clé API image manquante. Définis PHARELL_IMAGE_API_KEY.")
+
+    files = {"image": open(image_path, "rb")}
+    if mask_path:
+        files["mask"] = open(mask_path, "rb")
+
+    resp = requests.post(
+        f"{IMAGE_API_BASE}/images/edits",
+        headers={"Authorization": f"Bearer {IMAGE_API_KEY}"},
+        data={"prompt": prompt, "size": size, "n": 1, "response_format": "b64_json"},
+        files=files,
+        timeout=120,
+    )
+    if resp.status_code != 200:
+        raise ImageGenError(f"Erreur API image ({resp.status_code}): {resp.text}")
+
+    data = resp.json()
+    os.makedirs(save_dir, exist_ok=True)
+    img_bytes = base64.b64decode(data["data"][0]["b64_json"])
+    out_path = os.path.join(save_dir, f"edited_{abs(hash(prompt)) % 100000}.png")
+    with open(out_path, "wb") as f:
+        f.write(img_bytes)
+    return out_path
