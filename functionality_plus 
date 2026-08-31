@@ -1,0 +1,819 @@
+"""
+Pharell AI - Application principale
+Réunit : chat / génération de code / génération de script / génération d'images /
+recherche web / analyse de fichiers / génération + déploiement d'apps / upload YouTube.
+
+Lancement : python app.py
+"""
+import os
+import uuid
+import gradio as gr
+
+from modules import llm, image_gen, web_search, file_analysis, memory, app_generator
+
+try:
+    from modules import youtube_upload
+    YOUTUBE_AVAILABLE = True
+except ImportError:
+    YOUTUBE_AVAILABLE = False
+
+try:
+    from modules import deploy_vercel
+    DEPLOY_AVAILABLE = True
+except ImportError:
+    DEPLOY_AVAILABLE = False
+
+
+PHARELL_SYSTEM_PROMPT = (
+    "Tu es Pharell AI, un assistant intelligent, polyvalent et bienveillant. "
+    "Tu réponds en français par défaut, de manière claire et utile. "
+    "Tu peux écrire du code, expliquer des concepts, et aider sur des tâches variées."
+)
+
+CUSTOM_CSS = """
+#chatbot { background: rgba(20, 10, 40, 0.55); border-radius: 18px; border: 1px solid #a259ff55; }
+.gradio-container { font-family: 'Poppins', 'Segoe UI', sans-serif; }
+h1, h2, h3 { background: linear-gradient(90deg, #ff6ec7, #7b2ff7, #58c7ff);
+             -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+footer { visibility: hidden; }
+"""
+
+pharell_theme = gr.themes.Soft(
+    primary_hue=gr.themes.colors.purple,
+    secondary_hue=gr.themes.colors.pink,
+)
+
+SESSION_ID = str(uuid.uuid4())[:8]
+
+
+# ---------------------------------------------------------------------------
+# Onglet 1 : Chat (avec option "recherche web" et fichier joint)
+# ---------------------------------------------------------------------------
+def chat_fn(message, history, use_web_search, attached_file):
+    context = ""
+
+    if use_web_search:
+        try:
+            results = web_search.web_search(message, num_results=5)
+            context += "\n\nRésultats de recherche web:\n" + "\n".join(
+                f"- {r['title']}: {r['snippet']} ({r['link']})" for r in results
+            )
+        except Exception as e:
+            context += f"\n\n[Recherche web indisponible: {e}]"
+
+    if attached_file is not None:
+        try:
+            file_content = file_analysis.analyze_file(attached_file.name)
+            context += f"\n\nContenu du fichier joint:\n{file_content}"
+        except Exception as e:
+            context += f"\n\n[Impossible d'analyser le fichier: {e}]"
+
+    messages = []
+    for user_msg, bot_msg in history:
+        messages.append({"role": "user", "content": user_msg})
+        if bot_msg:
+            messages.append({"role": "assistant", "content": bot_msg})
+    messages.append({"role": "user", "content": message + context})
+
+    try:
+        response = llm.chat(messages, system_prompt=PHARELL_SYSTEM_PROMPT)
+    except Exception as e:
+        response = f"⚠️ Erreur : {e}"
+
+    history.append((message, response))
+    memory.save_session(SESSION_ID, history)
+    return "", history
+
+
+def clear_chat():
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Onglet 2 : Génération de code / scripts
+# ---------------------------------------------------------------------------
+def code_fn(instruction, language):
+    try:
+        return llm.generate_code(instruction, language=language)
+    except Exception as e:
+        return f"⚠️ Erreur : {e}"
+
+
+def script_fn(task_description, target):
+    try:
+        return llm.generate_script(task_description, target=target)
+    except Exception as e:
+        return f"⚠️ Erreur : {e}"
+
+
+# ---------------------------------------------------------------------------
+# Onglet 3 : Génération d'images
+# ---------------------------------------------------------------------------
+def image_fn(prompt, size):
+    try:
+        paths = image_gen.generate_image(prompt, size=size)
+        return paths
+    except Exception as e:
+        return None, f"⚠️ Erreur : {e}"
+
+
+# ---------------------------------------------------------------------------
+# Onglet 4 : Génération + déploiement d'applications
+# ---------------------------------------------------------------------------
+def webapp_fn(description, deploy):
+    try:
+        if deploy and DEPLOY_AVAILABLE:
+            url, code = app_generator.generate_and_deploy_webapp(description)
+            return code, f"✅ Déployé : {url}"
+        else:
+            code = app_generator.generate_webapp(description)
+            return code, "ℹ️ Génération seule (déploiement désactivé ou indisponible)."
+    except Exception as e:
+        return "", f"⚠️ Erreur : {e}"
+
+
+# ---------------------------------------------------------------------------
+# Onglet 5 : Upload YouTube
+# ---------------------------------------------------------------------------
+def youtube_fn(video_file, title, description, privacy):
+    if not YOUTUBE_AVAILABLE:
+        return "⚠️ Dépendances YouTube non installées (google-api-python-client)."
+    try:
+        url = youtube_upload.upload_video(video_file.name, title, description, privacy_status=privacy)
+        return f"✅ Vidéo uploadée : {url}"
+    except Exception as e:
+        return f"⚠️ Erreur : {e}"
+
+
+# ---------------------------------------------------------------------------
+# Interface
+# ---------------------------------------------------------------------------
+with gr.Blocks(theme=pharell_theme, css=CUSTOM_CSS, title="Pharell AI") as demo:
+    gr.Markdown("<center><font size=8>🌈 Pharell AI 🌈</center>")
+    gr.Markdown("<center>Assistant IA complet : chat, code, images, recherche web, apps et publication.</center>")
+
+    with gr.Tab("💬 Chat"):
+        chatbot = gr.Chatbot(elem_id="chatbot", height=450)
+        with gr.Row():
+            msg = gr.Textbox(label="Message", scale=4)
+            web_toggle = gr.Checkbox(label="🔎 Recherche web", value=False, scale=1)
+        file_input = gr.File(label="📎 Joindre un fichier (PDF, DOCX, XLSX, CSV, TXT...)")
+        with gr.Row():
+            send_btn = gr.Button("🚀 Envoyer", variant="primary")
+            clear_btn = gr.Button("🧹 Effacer")
+
+        send_btn.click(chat_fn, [msg, chatbot, web_toggle, file_input], [msg, chatbot])
+        msg.submit(chat_fn, [msg, chatbot, web_toggle, file_input], [msg, chatbot])
+        clear_btn.click(clear_chat, outputs=chatbot)
+
+    with gr.Tab("💻 Code"):
+        gr.Markdown("### Génération de code")
+        code_instruction = gr.Textbox(label="Décris ce que le code doit faire", lines=3)
+        code_lang = gr.Dropdown(["python", "javascript", "html", "css", "java", "c++", "sql"], value="python", label="Langage")
+        code_output = gr.Code(label="Code généré", language="python")
+        gr.Button("⚡ Générer le code", variant="primary").click(code_fn, [code_instruction, code_lang], code_output)
+
+        gr.Markdown("### Génération de script d'automatisation")
+        script_task = gr.Textbox(label="Décris la tâche à automatiser", lines=3)
+        script_target = gr.Dropdown(["python", "bash", "javascript"], value="python", label="Cible")
+        script_output = gr.Code(label="Script généré")
+        gr.Button("⚙️ Générer le script", variant="primary").click(script_fn, [script_task, script_target], script_output)
+
+    with gr.Tab("🎨 Images"):
+        img_prompt = gr.Textbox(label="Décris l'image à générer", lines=2)
+        img_size = gr.Dropdown(["1024x1024", "1792x1024", "1024x1792"], value="1024x1024", label="Format")
+        img_gallery = gr.Gallery(label="Résultat")
+        gr.Button("🎨 Générer l'image", variant="primary").click(image_fn, [img_prompt, img_size], img_gallery)
+
+    with gr.Tab("🌐 Applications"):
+        app_desc = gr.Textbox(label="Décris l'application web à créer", lines=3,
+                               placeholder="Ex: une todo-list avec ajout, suppression et sauvegarde locale")
+        app_deploy_toggle = gr.Checkbox(label="Déployer automatiquement (Vercel)", value=False)
+        app_code_output = gr.Code(label="Code de l'application", language="html")
+        app_status = gr.Textbox(label="Statut")
+        gr.Button("🚀 Générer l'application", variant="primary").click(
+            webapp_fn, [app_desc, app_deploy_toggle], [app_code_output, app_status]
+        )
+
+    with gr.Tab("📺 YouTube"):
+        gr.Markdown("Upload direct via l'API officielle YouTube (OAuth requis au premier lancement).")
+        yt_file = gr.File(label="Fichier vidéo (.mp4)")
+        yt_title = gr.Textbox(label="Titre")
+        yt_desc = gr.Textbox(label="Description", lines=3)
+        yt_privacy = gr.Dropdown(["private", "unlisted", "public"], value="private", label="Confidentialité")
+        yt_status = gr.Textbox(label="Statut")
+        gr.Button("📤 Uploader sur YouTube", variant="primary").click(
+            youtube_fn, [yt_file, yt_title, yt_desc, yt_privacy], yt_status
+        )
+
+    gr.Markdown(
+        "<font size=2>⚠️ Pharell AI nécessite tes propres clés API (LLM, images, YouTube, Vercel) "
+        "définies en variables d'environnement — voir README.md.</font>"
+    )
+
+if __name__ == "__main__":
+    demo.queue().launch(server_name="0.0.0.0", server_port=8000)
+"""
+Pharell AI - Configuration centrale
+Toutes les clés sont lues depuis les variables d'environnement.
+Ne JAMAIS écrire de clé API en dur dans le code.
+"""
+import os
+
+# --- LLM (chat / code / scripts) ---
+LLM_API_BASE = os.getenv("PHARELL_LLM_API_BASE", "https://api.openai.com/v1")
+LLM_API_KEY = os.getenv("PHARELL_LLM_API_KEY", "")
+LLM_MODEL = os.getenv("PHARELL_LLM_MODEL", "gpt-4o-mini")  # remplace par ton modèle Qwen local si besoin
+
+# --- Génération d'images ---
+IMAGE_API_BASE = os.getenv("PHARELL_IMAGE_API_BASE", "https://api.openai.com/v1")
+IMAGE_API_KEY = os.getenv("PHARELL_IMAGE_API_KEY", "")
+IMAGE_MODEL = os.getenv("PHARELL_IMAGE_MODEL", "dall-e-3")
+
+# --- YouTube (Google API) ---
+YOUTUBE_CLIENT_SECRETS_FILE = os.getenv("PHARELL_YT_CLIENT_SECRETS", "client_secrets.json")
+YOUTUBE_TOKEN_FILE = os.getenv("PHARELL_YT_TOKEN_FILE", "youtube_token.json")
+YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+
+# --- TikTok (Content Posting API - nécessite validation TikTok for Developers) ---
+TIKTOK_CLIENT_KEY = os.getenv("PHARELL_TT_CLIENT_KEY", "")
+TIKTOK_CLIENT_SECRET = os.getenv("PHARELL_TT_CLIENT_SECRET", "")
+TIKTOK_REDIRECT_URI = os.getenv("PHARELL_TT_REDIRECT_URI", "http://localhost:8000/tiktok/callback")
+TIKTOK_ACCESS_TOKEN_FILE = os.getenv("PHARELL_TT_TOKEN_FILE", "tiktok_token.json")
+"""
+Pharell AI - Module LLM
+Génération de texte, réponses conversationnelles et génération de code.
+Compatible avec toute API respectant le format OpenAI (OpenAI, Groq, OpenRouter,
+ou un serveur Qwen local exposé via vLLM / text-generation-webui en mode OpenAI-like).
+"""
+import requests
+from config import LLM_API_BASE, LLM_API_KEY, LLM_MODEL
+
+
+class LLMError(Exception):
+    pass
+
+
+def chat(messages, model=None, temperature=0.7, max_tokens=2000, system_prompt=None):
+    """
+    messages: liste de dicts [{"role": "user"/"assistant", "content": "..."}]
+    system_prompt: instruction système optionnelle (personnalité, contraintes)
+    """
+    if not LLM_API_KEY:
+        raise LLMError("Clé API LLM manquante. Définis PHARELL_LLM_API_KEY.")
+
+    full_messages = []
+    if system_prompt:
+        full_messages.append({"role": "system", "content": system_prompt})
+    full_messages.extend(messages)
+
+    resp = requests.post(
+        f"{LLM_API_BASE}/chat/completions",
+        headers={
+            "Authorization": f"Bearer {LLM_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": model or LLM_MODEL,
+            "messages": full_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        },
+        timeout=120,
+    )
+    if resp.status_code != 200:
+        raise LLMError(f"Erreur API LLM ({resp.status_code}): {resp.text}")
+
+    data = resp.json()
+    return data["choices"][0]["message"]["content"]
+
+
+def generate_code(instruction, language="python", context_files=None):
+    """
+    Génère du code à partir d'une instruction en langage naturel.
+    context_files: dict {nom_fichier: contenu} pour donner du contexte au modèle.
+    """
+    system_prompt = (
+        "Tu es Pharell AI, un assistant expert en développement logiciel. "
+        "Tu écris du code propre, commenté, prêt à l'exécution, sans texte superflu autour. "
+        "Réponds uniquement avec le code demandé, dans un bloc de code."
+    )
+
+    user_content = f"Langage cible : {language}\n\nInstruction : {instruction}"
+    if context_files:
+        ctx = "\n\n".join(f"### Fichier: {name}\n```\n{content}\n```" for name, content in context_files.items())
+        user_content += f"\n\nContexte (fichiers existants):\n{ctx}"
+
+    return chat(
+        messages=[{"role": "user", "content": user_content}],
+        system_prompt=system_prompt,
+        temperature=0.2,
+        max_tokens=4000,
+    )
+
+
+def generate_script(task_description, target="python"):
+    """
+    Génère un script d'automatisation complet (ex: automatiser une tâche répétitive,
+    scraper, traitement de fichiers, etc.)
+    """
+    return generate_code(
+        instruction=f"Écris un script complet et autonome qui réalise la tâche suivante : {task_description}",
+        language=target,
+    )
+"""
+Pharell AI - Module de génération d'images
+Compatible avec l'API Images d'OpenAI (DALL-E) ou toute API compatible.
+Pour Stability AI / Stable Diffusion, adapte le payload dans generate_image_stability().
+"""
+import base64
+import os
+import requests
+from config import IMAGE_API_BASE, IMAGE_API_KEY, IMAGE_MODEL
+
+
+class ImageGenError(Exception):
+    pass
+
+
+def generate_image(prompt, size="1024x1024", n=1, save_dir="generated_images"):
+    """
+    Génère une ou plusieurs images à partir d'un prompt texte.
+    Retourne la liste des chemins de fichiers sauvegardés.
+    """
+    if not IMAGE_API_KEY:
+        raise ImageGenError("Clé API image manquante. Définis PHARELL_IMAGE_API_KEY.")
+
+    resp = requests.post(
+        f"{IMAGE_API_BASE}/images/generations",
+        headers={
+            "Authorization": f"Bearer {IMAGE_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": IMAGE_MODEL,
+            "prompt": prompt,
+            "size": size,
+            "n": n,
+            "response_format": "b64_json",
+        },
+        timeout=120,
+    )
+    if resp.status_code != 200:
+        raise ImageGenError(f"Erreur API image ({resp.status_code}): {resp.text}")
+
+    data = resp.json()
+    os.makedirs(save_dir, exist_ok=True)
+    paths = []
+    for i, item in enumerate(data["data"]):
+        img_bytes = base64.b64decode(item["b64_json"])
+        path = os.path.join(save_dir, f"image_{abs(hash(prompt)) % 100000}_{i}.png")
+        with open(path, "wb") as f:
+            f.write(img_bytes)
+        paths.append(path)
+    return paths
+
+
+def edit_image(image_path, prompt, mask_path=None, size="1024x1024", save_dir="generated_images"):
+    """
+    Édite une image existante à partir d'un prompt (inpainting si un mask est fourni).
+    """
+    if not IMAGE_API_KEY:
+        raise ImageGenError("Clé API image manquante. Définis PHARELL_IMAGE_API_KEY.")
+
+    files = {"image": open(image_path, "rb")}
+    if mask_path:
+        files["mask"] = open(mask_path, "rb")
+
+    resp = requests.post(
+        f"{IMAGE_API_BASE}/images/edits",
+        headers={"Authorization": f"Bearer {IMAGE_API_KEY}"},
+        data={"prompt": prompt, "size": size, "n": 1, "response_format": "b64_json"},
+        files=files,
+        timeout=120,
+    )
+    if resp.status_code != 200:
+        raise ImageGenError(f"Erreur API image ({resp.status_code}): {resp.text}")
+
+    data = resp.json()
+    os.makedirs(save_dir, exist_ok=True)
+    img_bytes = base64.b64decode(data["data"][0]["b64_json"])
+    out_path = os.path.join(save_dir, f"edited_{abs(hash(prompt)) % 100000}.png")
+    with open(out_path, "wb") as f:
+        f.write(img_bytes)
+    return out_path
+"""
+Pharell AI - Module de recherche web
+Deux modes :
+1) Via une clé SerpAPI / Bing (recommandé, résultats fiables et structurés)
+2) Fallback gratuit via DuckDuckGo HTML (pas de clé requise, usage raisonnable uniquement)
+"""
+import os
+import requests
+from bs4 import BeautifulSoup
+
+SERPAPI_KEY = os.getenv("PHARELL_SERPAPI_KEY", "")
+
+
+class WebSearchError(Exception):
+    pass
+
+
+def search_serpapi(query, num_results=5):
+    if not SERPAPI_KEY:
+        raise WebSearchError("Clé SerpAPI manquante. Définis PHARELL_SERPAPI_KEY.")
+    resp = requests.get(
+        "https://serpapi.com/search",
+        params={"q": query, "api_key": SERPAPI_KEY, "num": num_results},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        raise WebSearchError(f"Erreur SerpAPI ({resp.status_code}): {resp.text}")
+    data = resp.json()
+    results = []
+    for item in data.get("organic_results", [])[:num_results]:
+        results.append({
+            "title": item.get("title"),
+            "link": item.get("link"),
+            "snippet": item.get("snippet"),
+        })
+    return results
+
+
+def search_duckduckgo(query, num_results=5):
+    """Fallback sans clé API - à utiliser modérément (scraping HTML)."""
+    resp = requests.post(
+        "https://html.duckduckgo.com/html/",
+        data={"q": query},
+        headers={"User-Agent": "Mozilla/5.0 (compatible; PharellAI/1.0)"},
+        timeout=30,
+    )
+    soup = BeautifulSoup(resp.text, "html.parser")
+    results = []
+    for r in soup.select(".result__body")[:num_results]:
+        title_el = r.select_one(".result__a")
+        snippet_el = r.select_one(".result__snippet")
+        if title_el:
+            results.append({
+                "title": title_el.get_text(strip=True),
+                "link": title_el.get("href"),
+                "snippet": snippet_el.get_text(strip=True) if snippet_el else "",
+            })
+    return results
+
+
+def web_search(query, num_results=5):
+    """Point d'entrée unique : utilise SerpAPI si dispo, sinon DuckDuckGo."""
+    if SERPAPI_KEY:
+        return search_serpapi(query, num_results)
+    return search_duckduckgo(query, num_results)
+
+
+def fetch_page_text(url, max_chars=5000):
+    """Récupère et nettoie le texte principal d'une page web."""
+    resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; PharellAI/1.0)"}, timeout=30)
+    soup = BeautifulSoup(resp.text, "html.parser")
+    for tag in soup(["script", "style", "nav", "footer", "header"]):
+        tag.decompose()
+    text = " ".join(soup.get_text(separator=" ").split())
+    return text[:max_chars]
+"""
+Pharell AI - Module d'analyse de fichiers
+Extrait le contenu texte/tabulaire de différents formats pour les donner en contexte au LLM.
+"""
+import os
+import json
+
+
+class FileAnalysisError(Exception):
+    pass
+
+
+def analyze_file(path, max_chars=8000):
+    """Point d'entrée unique : détecte le type et extrait le contenu pertinent."""
+    ext = os.path.splitext(path)[1].lower()
+
+    if ext == ".pdf":
+        return _read_pdf(path, max_chars)
+    elif ext in (".docx",):
+        return _read_docx(path, max_chars)
+    elif ext in (".xlsx", ".xls"):
+        return _read_xlsx(path, max_chars)
+    elif ext == ".csv":
+        return _read_csv(path, max_chars)
+    elif ext in (".txt", ".md", ".json", ".py", ".js", ".html", ".css"):
+        return _read_text(path, max_chars)
+    elif ext in (".png", ".jpg", ".jpeg", ".webp"):
+        return f"[Fichier image : {path}] - utilise un modèle vision pour l'analyser en détail."
+    else:
+        raise FileAnalysisError(f"Format non supporté : {ext}")
+
+
+def _read_text(path, max_chars):
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        return f.read()[:max_chars]
+
+
+def _read_pdf(path, max_chars):
+    from pypdf import PdfReader
+    reader = PdfReader(path)
+    text = ""
+    for page in reader.pages:
+        text += page.extract_text() or ""
+        if len(text) >= max_chars:
+            break
+    return text[:max_chars]
+
+
+def _read_docx(path, max_chars):
+    from docx import Document
+    doc = Document(path)
+    text = "\n".join(p.text for p in doc.paragraphs)
+    return text[:max_chars]
+
+
+def _read_xlsx(path, max_chars):
+    import openpyxl
+    wb = openpyxl.load_workbook(path, data_only=True)
+    output = []
+    for sheet in wb.sheetnames:
+        ws = wb[sheet]
+        output.append(f"--- Feuille: {sheet} ---")
+        for row in ws.iter_rows(values_only=True, max_row=100):
+            output.append(", ".join(str(c) if c is not None else "" for c in row))
+    text = "\n".join(output)
+    return text[:max_chars]
+
+
+def _read_csv(path, max_chars):
+    import csv
+    rows = []
+    with open(path, newline="", encoding="utf-8", errors="ignore") as f:
+        reader = csv.reader(f)
+        for i, row in enumerate(reader):
+            rows.append(", ".join(row))
+            if i > 200:
+                break
+    return "\n".join(rows)[:max_chars]
+"""
+Pharell AI - Générateur d'applications
+Génère une mini-application web complète (HTML/CSS/JS en un seul fichier ou multi-fichiers)
+à partir d'une description, prête à être déployée avec le module deploy_vercel.
+"""
+from modules.llm import chat
+
+APP_SYSTEM_PROMPT = """Tu es Pharell AI, expert en développement web front-end.
+Génère une application web COMPLÈTE et fonctionnelle en un seul fichier HTML
+(CSS et JS inclus dans le même fichier, pas de dépendances externes sauf CDN si nécessaire).
+Réponds UNIQUEMENT avec le code HTML complet, sans explication ni texte autour, sans balises markdown."""
+
+
+def generate_webapp(description):
+    """Retourne le code HTML complet d'une mini-application prête à déployer."""
+    html_code = chat(
+        messages=[{"role": "user", "content": f"Crée cette application : {description}"}],
+        system_prompt=APP_SYSTEM_PROMPT,
+        temperature=0.3,
+        max_tokens=4000,
+    )
+    # Nettoyage au cas où le modèle ajoute des balises markdown malgré la consigne
+    html_code = html_code.strip()
+    if html_code.startswith("```"):
+        html_code = html_code.split("```")[1]
+        if html_code.startswith("html"):
+            html_code = html_code[4:]
+    return html_code.strip()
+
+
+def generate_and_deploy_webapp(description, project_name="pharell-app"):
+    """Génère l'app puis la déploie directement sur Vercel. Retourne l'URL publique."""
+    from modules.deploy_vercel import deploy_static_site
+    html_code = generate_webapp(description)
+    url = deploy_static_site(project_name, {"index.html": html_code})
+    return url, html_code
+"""
+Pharell AI - Module YouTube
+Upload de vidéos via l'API officielle YouTube Data API v3 + OAuth2.
+Nécessite un fichier client_secrets.json (créé depuis Google Cloud Console,
+type "Desktop app", avec la YouTube Data API v3 activée).
+Au premier lancement, une fenêtre de navigateur s'ouvre pour l'autorisation.
+"""
+import os
+import pickle
+from config import YOUTUBE_CLIENT_SECRETS_FILE, YOUTUBE_TOKEN_FILE, YOUTUBE_SCOPES
+
+
+class YouTubeError(Exception):
+    pass
+
+
+def _get_authenticated_service():
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from google.auth.transport.requests import Request
+    from googleapiclient.discovery import build
+
+    creds = None
+    if os.path.exists(YOUTUBE_TOKEN_FILE):
+        with open(YOUTUBE_TOKEN_FILE, "rb") as f:
+            creds = pickle.load(f)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            if not os.path.exists(YOUTUBE_CLIENT_SECRETS_FILE):
+                raise YouTubeError(
+                    f"Fichier {YOUTUBE_CLIENT_SECRETS_FILE} introuvable. "
+                    "Télécharge-le depuis Google Cloud Console (OAuth Desktop App)."
+                )
+            flow = InstalledAppFlow.from_client_secrets_file(YOUTUBE_CLIENT_SECRETS_FILE, YOUTUBE_SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open(YOUTUBE_TOKEN_FILE, "wb") as f:
+            pickle.dump(creds, f)
+
+    return build("youtube", "v3", credentials=creds)
+
+
+def upload_video(video_path, title, description="", tags=None, category_id="22", privacy_status="private"):
+    """
+    privacy_status: 'private', 'unlisted' ou 'public'.
+    Par défaut 'private' par sécurité — passe explicitement 'public' pour publier réellement.
+    """
+    from googleapiclient.http import MediaFileUpload
+
+    youtube = _get_authenticated_service()
+
+    body = {
+        "snippet": {
+            "title": title,
+            "description": description,
+            "tags": tags or [],
+            "categoryId": category_id,
+        },
+        "status": {"privacyStatus": privacy_status},
+    }
+
+    media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
+    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+
+    response = None
+    while response is None:
+        status, response = request.next_chunk()
+        if status:
+            print(f"Upload en cours : {int(status.progress() * 100)}%")
+
+    video_id = response["id"]
+    return f"https://youtu.be/{video_id}"
+"""
+Pharell AI - Module TikTok (squelette)
+La Content Posting API de TikTok nécessite :
+1) Un compte TikTok for Developers approuvé pour l'usage "Direct Post" ou "Upload".
+2) Un flux OAuth2 complet (autorisation utilisateur -> code -> access_token).
+Ce module fournit le squelette fonctionnel ; il ne peut être testé qu'une fois
+ton app validée par TikTok (processus de review côté TikTok, indépendant de ce code).
+"""
+import os
+import json
+import requests
+from config import TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, TIKTOK_REDIRECT_URI, TIKTOK_ACCESS_TOKEN_FILE
+
+TIKTOK_AUTH_URL = "https://www.tiktok.com/v2/auth/authorize/"
+TIKTOK_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/"
+TIKTOK_UPLOAD_INIT_URL = "https://open.tiktokapis.com/v2/post/publish/video/init/"
+
+
+class TikTokError(Exception):
+    pass
+
+
+def get_authorization_url(scope="video.publish"):
+    if not TIKTOK_CLIENT_KEY:
+        raise TikTokError("PHARELL_TT_CLIENT_KEY manquant.")
+    return (
+        f"{TIKTOK_AUTH_URL}?client_key={TIKTOK_CLIENT_KEY}&response_type=code"
+        f"&scope={scope}&redirect_uri={TIKTOK_REDIRECT_URI}&state=pharellai"
+    )
+
+
+def exchange_code_for_token(auth_code):
+    resp = requests.post(
+        TIKTOK_TOKEN_URL,
+        data={
+            "client_key": TIKTOK_CLIENT_KEY,
+            "client_secret": TIKTOK_CLIENT_SECRET,
+            "code": auth_code,
+            "grant_type": "authorization_code",
+            "redirect_uri": TIKTOK_REDIRECT_URI,
+        },
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        raise TikTokError(f"Erreur échange token ({resp.status_code}): {resp.text}")
+    token_data = resp.json()
+    with open(TIKTOK_ACCESS_TOKEN_FILE, "w") as f:
+        json.dump(token_data, f)
+    return token_data
+
+
+def upload_video(video_path, title):
+    """Nécessite un access_token valide obtenu via le flux OAuth ci-dessus."""
+    if not os.path.exists(TIKTOK_ACCESS_TOKEN_FILE):
+        raise TikTokError("Aucun token TikTok trouvé. Effectue d'abord le flux OAuth.")
+    with open(TIKTOK_ACCESS_TOKEN_FILE) as f:
+        token_data = json.load(f)
+    access_token = token_data["access_token"]
+
+    file_size = os.path.getsize(video_path)
+    resp = requests.post(
+        TIKTOK_UPLOAD_INIT_URL,
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        json={
+            "post_info": {"title": title, "privacy_level": "SELF_ONLY"},
+            "source_info": {
+                "source": "FILE_UPLOAD",
+                "video_size": file_size,
+                "chunk_size": file_size,
+                "total_chunk_count": 1,
+            },
+        },
+        timeout=60,
+    )
+    if resp.status_code != 200:
+        raise TikTokError(f"Erreur init upload ({resp.status_code}): {resp.text}")
+
+    init_data = resp.json()
+    upload_url = init_data["data"]["upload_url"]
+
+    with open(video_path, "rb") as f:
+        video_bytes = f.read()
+    put_resp = requests.put(
+        upload_url,
+        headers={"Content-Type": "video/mp4", "Content-Range": f"bytes 0-{file_size-1}/{file_size}"},
+        data=video_bytes,
+        timeout=300,
+    )
+    if put_resp.status_code not in (200, 201):
+        raise TikTokError(f"Erreur upload fichier ({put_resp.status_code}): {put_resp.text}")
+
+    return "Vidéo envoyée à TikTok — vérifie le statut de publication dans ton compte."
+# 🌈 Pharell AI
+
+Assistant IA complet réunissant : chat, génération de code, génération de scripts
+d'automatisation, génération d'images, recherche web, analyse de fichiers,
+génération + déploiement d'applications web, et publication YouTube.
+
+## Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+## Configuration (variables d'environnement)
+
+| Variable | Description |
+|---|---|
+| `PHARELL_LLM_API_BASE` | URL de base de l'API LLM (défaut: OpenAI) |
+| `PHARELL_LLM_API_KEY` | Clé API pour le chat/code |
+| `PHARELL_LLM_MODEL` | Nom du modèle (ex: gpt-4o-mini, ou ton endpoint Qwen local) |
+| `PHARELL_IMAGE_API_KEY` | Clé API pour la génération d'images |
+| `PHARELL_IMAGE_MODEL` | Modèle d'image (défaut: dall-e-3) |
+| `PHARELL_SERPAPI_KEY` | (optionnel) Clé SerpAPI pour la recherche web fiable |
+| `PHARELL_VERCEL_TOKEN` | Token Vercel pour le déploiement d'apps |
+| `PHARELL_YT_CLIENT_SECRETS` | Chemin vers client_secrets.json (Google Cloud Console) |
+| `PHARELL_TT_CLIENT_KEY` / `PHARELL_TT_CLIENT_SECRET` | Identifiants TikTok for Developers |
+
+Exemple (Linux/Mac) :
+```bash
+export PHARELL_LLM_API_KEY="sk-..."
+export PHARELL_IMAGE_API_KEY="sk-..."
+export PHARELL_VERCEL_TOKEN="..."
+```
+
+## Lancement
+
+```bash
+python app.py
+```
+L'interface s'ouvre sur `http://localhost:8000`.
+
+## Fonctionnalités
+
+- **Chat** : conversation avec recherche web à la demande et analyse de fichiers joints.
+- **Code** : génération de code dans plusieurs langages.
+- **Scripts** : génération de scripts d'automatisation (Python/Bash/JS).
+- **Images** : génération d'images à partir d'un prompt texte.
+- **Applications** : génère une mini web-app complète (HTML/CSS/JS) et peut la déployer
+  directement en ligne via Vercel, avec URL publique en retour.
+- **YouTube** : upload de vidéos via l'API officielle (OAuth2), en privé par défaut.
+- **TikTok** (`modules/tiktok_upload.py`) : squelette prêt, nécessite validation
+  de ton app par TikTok for Developers avant utilisation réelle.
+- **Mémoire** (`modules/memory.py`) : sauvegarde locale de l'historique de conversation.
+
+## Notes importantes
+
+- Aucune clé API n'est codée en dur — tout passe par des variables d'environnement.
+- L'upload YouTube utilise l'API officielle avec consentement OAuth (pas de scraping
+  ni de connexion par mot de passe).
+- La publication TikTok nécessite une validation manuelle de ton application par TikTok ;
+  ce n'est pas quelque chose que le code seul peut débloquer.
