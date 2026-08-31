@@ -1,0 +1,60 @@
+# 🌈 Pharell AI
+
+Assistant IA complet réunissant : chat, génération de code, génération de scripts
+d'automatisation, génération d'images, recherche web, analyse de fichiers,
+génération + déploiement d'applications web, et publication YouTube.
+
+## Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+## Configuration (variables d'environnement)
+
+| Variable | Description |
+|---|---|
+| `PHARELL_LLM_API_BASE` | URL de base de l'API LLM (défaut: OpenAI) |
+| `PHARELL_LLM_API_KEY` | Clé API pour le chat/code |
+| `PHARELL_LLM_MODEL` | Nom du modèle (ex: gpt-4o-mini, ou ton endpoint Qwen local) |
+| `PHARELL_IMAGE_API_KEY` | Clé API pour la génération d'images |
+| `PHARELL_IMAGE_MODEL` | Modèle d'image (défaut: dall-e-3) |
+| `PHARELL_SERPAPI_KEY` | (optionnel) Clé SerpAPI pour la recherche web fiable |
+| `PHARELL_VERCEL_TOKEN` | Token Vercel pour le déploiement d'apps |
+| `PHARELL_YT_CLIENT_SECRETS` | Chemin vers client_secrets.json (Google Cloud Console) |
+| `PHARELL_TT_CLIENT_KEY` / `PHARELL_TT_CLIENT_SECRET` | Identifiants TikTok for Developers |
+
+Exemple (Linux/Mac) :
+```bash
+export PHARELL_LLM_API_KEY="sk-..."
+export PHARELL_IMAGE_API_KEY="sk-..."
+export PHARELL_VERCEL_TOKEN="..."
+```
+
+## Lancement
+
+```bash
+python app.py
+```
+L'interface s'ouvre sur `http://localhost:8000`.
+
+## Fonctionnalités
+
+- **Chat** : conversation avec recherche web à la demande et analyse de fichiers joints.
+- **Code** : génération de code dans plusieurs langages.
+- **Scripts** : génération de scripts d'automatisation (Python/Bash/JS).
+- **Images** : génération d'images à partir d'un prompt texte.
+- **Applications** : génère une mini web-app complète (HTML/CSS/JS) et peut la déployer
+  directement en ligne via Vercel, avec URL publique en retour.
+- **YouTube** : upload de vidéos via l'API officielle (OAuth2), en privé par défaut.
+- **TikTok** (`modules/tiktok_upload.py`) : squelette prêt, nécessite validation
+  de ton app par TikTok for Developers avant utilisation réelle.
+- **Mémoire** (`modules/memory.py`) : sauvegarde locale de l'historique de conversation.
+
+## Notes importantes
+
+- Aucune clé API n'est codée en dur — tout passe par des variables d'environnement.
+- L'upload YouTube utilise l'API officielle avec consentement OAuth (pas de scraping
+  ni de connexion par mot de passe).
+- La publication TikTok nécessite une validation manuelle de ton application par TikTok ;
+  ce n'est pas quelque chose que le code seul peut débloquer.
